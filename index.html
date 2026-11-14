@@ -252,17 +252,34 @@ class FoodViewer extends HTMLElement {
     this.N = srcs.length;
     if (this.seam && this.N <= this.seam * 2 + 2) this.seam = 0;   // ፍሬሞች ጥቂት ከሆኑ አይተገበርም
     if (this.N < 2) { this.loader.textContent = 'Add at least 2 images.'; return; }
-    let done = 0;
-    this.frames = await Promise.all(srcs.map(src => new Promise(res => {
-      const img = new Image();
-      img.alt = ''; img.draggable = false;
-      const ok = () => { this.meter.style.width = (++done / this.N * 100) + '%'; res(img); };
-      img.onload = ok;
-      img.onerror = () => { console.warn('food-viewer: failed to load', src.slice(0, 80)); ok(); };
-      img.src = src;
-    })));
-    // ሁሉም ተጭነው ካለቁ በኋላ ብቻ ወደ DOM ይገባሉ — ስለዚህ መቆራረጥ አይኖርም
+    // ባለ ሁለት ደረጃ መጫን፦ መጀመሪያ እያንዳንዱን 3ኛ ፍሬም ብቻ (ፈጣን)፣ የቀሩት ከበስተጀርባ ይጫናሉ
+    const ST = 3, NN = this.N; let done = 0;
+    const all = srcs.map((_, i) => i), first = all.filter(i => i % ST === 0), rest = all.filter(i => i % ST !== 0);
+    const fr = srcs.map(() => { const im = new Image(); im.alt = ''; im.draggable = false; return im; });
+    const good = new Array(NN).fill(false);
+    // አንድ ምስል ሲወድቅ እስከ 5 ጊዜ ደግሞ ይሞክራል
+    const fetchOne = src => new Promise(res => {
+      let tries = 0;
+      const go = () => { const t = new Image(); t.onload = () => res(true);
+        t.onerror = () => { if (++tries < 5) setTimeout(go, 500 * tries); else res(false); };
+        t.src = src; };
+      go();
+    });
+    // በአንድ ጊዜ የሚጫኑትን ብዛት መገደብ (ኔትዎርኩ እንዳይታነቅ)
+    const pool = async (idxs, limit, fn) => { let k = 0;
+      await Promise.all(Array.from({ length: limit }, async () => { while (k < idxs.length) await fn(idxs[k++]); })); };
+    await pool(first, 6, async i => {
+      good[i] = await fetchOne(srcs[i]);
+      if (good[i]) fr[i].src = srcs[i];
+      this.meter.style.width = (++done / first.length * 100) + '%';
+    });
+    // ገና ያልደረሱ ፍሬሞች ከቅርቡ ጥሩ ፍሬም ምስል ይዋሳሉ (ጥቁር እንዳይታይ)
+    const nearest = i => { for (let d = 0; d < NN; d++) for (const j of [i - d, i + d]) { const k = ((j % NN) + NN) % NN; if (good[k]) return k; } return 0; };
+    for (let i = 0; i < NN; i++) if (!good[i]) fr[i].src = srcs[nearest(i)];
+    this.frames = fr;
     this.frames.forEach(img => this.wrap.appendChild(img));
+    // የቀሩት ፍሬሞች ከበስተጀርባ ይጫናሉ፣ ሲደርሱ ቦታቸውን ይይዛሉ
+    pool(rest, 3, async i => { if (await fetchOne(srcs[i])) { good[i] = true; fr[i].src = srcs[i]; } });
     this.loader.classList.add('done');
     this.last = performance.now();
     this.raf = requestAnimationFrame(t => this._tick(t));
